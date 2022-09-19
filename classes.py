@@ -3,7 +3,6 @@ import socket
 import ssl
 import threading
 
-
 class HTTPServer:
 
     """
@@ -35,8 +34,8 @@ class HTTPServer:
         while True:
             sock.listen(10)
             client_sock,client_addr = sock.accept()
-            self.remove_threads()
-            self.threads.append(threading.Thread(target=self.handleClient,args=(client_sock,)))
+            # self.remove_threads()
+            self.threads.append(threading.Thread(target=self.handleClient,args=(client_sock,client_addr,)))
             self.threads[len(self.threads)-1].start() 
 
     def remove_threads(self):
@@ -48,27 +47,33 @@ class HTTPServer:
         for i in dead:
             self.threads = self.threads[:i]+self.threads[i+1:]
 
-    def handleClient(self,client_sock):
-        host,port = client_sock.getpeername()
-        print("[+]DEBUG : Rceived connection from ",host,port)
+    def handleClient(self,client_sock,client_addr):
+        host,port = client_addr
+        print("[+]DEBUG : Received connection from ",host,port)
         
         while True:
-            
-            if client_sock.fileno == -1:
-                print("Closed connection")
-                return
-
-            req = client_sock.recv(1024).decode()
-            resp=self.handleRequest(req)
-                        
+            try:
+                if client_sock.fileno == -1:
+                    print("Closed connection")
+                    return 
+                req = client_sock.recv(1024).decode()
+                print(f"RECVD: from {host}:{port}\n{req} {'-'*20}")
+                resp=self.handleRequest(req)
+                
+                client_sock.send(resp.encode())
+            except ConnectionResetError:
+                break
+        return                       
 
     def handleRequest(self,req):
 
+        if "\r\n\r\n" in req:
+            pre,body = req.split("\r\n\r\n")
+            first_line= pre.split("\r\n")[0]
+            header_list = pre.split("\r\n")[1:]
+        else:
+            return ""
         
-        pre,body = req.split("\r\n\r\n")
-        first_line= pre.split("\r\n")[0]
-        header_list = pre.split("\r\n")[1:]
-
         # print(f"BODY: \n{body}\n"+"-"*30+"\n"+f"REQUEST:\n{first_line}\n"+"-"*30+"\n"+f"HEADERS:\n{header_list}\n"+"-"*30+"\n")
         
         method,url,version = first_line.split(' ')
@@ -87,19 +92,22 @@ class HTTPServer:
                 
 
     def doGet(self,url,header_list,body):
-        
-        
-        if self.waf.checkGet(resp):
-            resp  = "HTTP/1.1 200 OK\r\n\r\nYou passed the security check!!!"
+        resp = "HTTP/1.1 400 Bad Request\r\n\r\nThe Client sent a malformed request is all we know."
+        resource = url.split('/')[1]
+        if self.waf.checkGet(url,header_list,body):
+            resp = "HTTP/1.1 200 OK\r\nContent-Encoding: text/html\r\n\r\n"
+            with open(resource,"r") as f:
+                resp += f.read()
+            # resp  = "HTTP/1.1 200 OK\r\n\r\nYou passed the security check!!!"
         print(f"[+]DEBUG: REQUESTED URL : {url}")
 
-        return
+        return resp
 
     def doPost(self,url,header_list,body):
         resp = "HTTP/1.1 400 Bad Request\r\n\r\nThe Client sent a malformed request is all we know."
-        if self.waf.checkPost(resp):
-                    resp= "HTTP/1.1 200 OK\r\n\r\nYou passed the security check!!!"
-        
+        if self.waf.checkPost(url,header_list,body):
+            resp= "HTTP/1.1 200 OK\r\n\r\nYou passed the security check!!!"
+        return resp
 
 
 class WAF:
@@ -107,8 +115,8 @@ class WAF:
     def __init__(self,):
         pass    
 
-    def checkGet(self,req):
-        return True
+    def checkGet(self,url,header_list,body):
+        return False
 
     def checkPost(self,req):
         return True
