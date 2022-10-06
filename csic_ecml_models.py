@@ -28,8 +28,8 @@ vocabulary = {}
 for i in range(len(ngrams)):
     vocabulary[ngrams[i]]=i
 
-vectorizer_1 = TfidfVectorizer(min_df=1,ngram_range=(1,1),analyzer='char',vocabulary=vocabulary)
-vectorizer_2 = TfidfVectorizer(min_df=1,ngram_range=(2,2),analyzer='char')
+vectorizer_get = TfidfVectorizer(min_df=1,ngram_range=(1,1),analyzer='char',vocabulary=vocabulary)
+vectorizer_post = TfidfVectorizer(min_df=1,ngram_range=(1,1),analyzer='char',vocabulary=vocabulary)
 
 
 df = pd.read_csv('C:\\Users\\bhavarth\\OneDrive\\Desktop\\Project Exhibition\\datasets\\HTTP Requests\\csic_ecml_normalized_final.csv')
@@ -49,36 +49,43 @@ post_df_imputed.columns = post_df.columns
 get_df_imputed = pd.DataFrame(imputer.fit_transform(get_df))
 get_df_imputed.columns = get_df.drop(['Content-Type'],axis=1).columns
 
-post_df_imputed['Request'] = post_df_imputed.agg(func=' '.join,axis=1)
+post_temp = post_df_imputed.copy()
+post_temp = post_temp.drop(['Class','Method'],axis=1)
+get_temp = get_df_imputed.copy()
+get_temp = get_temp.drop(['Class','Method'],axis=1)
+
+post_df_imputed['Request'] =post_temp.agg(func=''.join,axis=1)
 post_df_imputed.Request = post_df_imputed['Request'].apply(lambda d : d.lower())
-get_df_imputed['Request'] = get_df_imputed.agg(func=' '.join,axis=1)
+get_df_imputed['Request'] = get_temp.agg(func=''.join,axis=1)
 get_df_imputed.Request = get_df_imputed['Request'].apply(lambda d : d.lower())
 
+print(post_df_imputed.Request.head())
 
-features_1_post=pd.DataFrame(vectorizer_1.fit_transform(post_df_imputed.Request).todense(),columns=vectorizer_1.get_feature_names_out())
-features_1_get = pd.DataFrame(vectorizer_1.fit_transform(get_df_imputed.Request).todense(),columns=vectorizer_1.get_feature_names_out())
-# features_2=pd.DataFrame(vectorizer_2.fit_transform(df_imputed.Request).todense(),columns=vectorizer_2.get_feature_names_out())
+post_df_train,post_df_test,y_post_train,y_post_test = train_test_split(post_df_imputed.drop('Class',axis=1),post_df_imputed.Class,test_size=0.2,random_state=11)
+get_df_train,get_df_test,y_get_train,y_get_test = train_test_split(get_df_imputed.drop('Class',axis=1),get_df_imputed.Class,test_size=0.2,random_state=11)
 
-print(features_1_get.columns)
-print(features_1_post.columns)
-print("1-gram features shape for post requests ",features_1_post.shape)
-print("1-gram features shape for get requests ",features_1_get.shape)
+post_df_test_tmp = post_df_test.copy()
+post_df_test_tmp['Class'] = y_post_test
+post_df_test_tmp.to_csv('post_test.csv')
 
-features_1_post['Class'] = post_df_imputed.Class
-features_1_post['Class'] = post_df_imputed.Class.replace(to_replace={"Anomalous":0,"Valid":1})
+get_df_test_tmp = get_df_test.copy()
+get_df_test_tmp['Class'] = y_get_test
+get_df_test_tmp.to_csv('get_test.csv')
 
-features_1_get['Class'] = get_df_imputed.Class
-features_1_get['Class'] = get_df_imputed.Class.replace(to_replace={"Anomalous":0,"Valid":1})
-
-X1_get = features_1_get
-y1_get = X1_get.pop('Class')
-X1_post = features_1_post
-y1_post = X1_post.pop('Class')
-
-X1_post_train,X1_post_test,y1_post_train,y1_post_test = train_test_split(X1_post,y1_post,test_size=0.2,random_state=11)
+post_matrix=vectorizer_post.fit_transform(post_df_train.Request)
+get_matrix=vectorizer_get.fit_transform(get_df_train.Request)
+features_train_post=pd.DataFrame(post_matrix.todense(),columns=vectorizer_post.get_feature_names_out())
+pickle.dump(vectorizer_post,open('models/tfidf_post.sav','wb'))
+features_train_get = pd.DataFrame(get_matrix.todense(),columns=vectorizer_get.get_feature_names_out())
+pickle.dump(vectorizer_get,open('models/tfidf_get.sav','wb'))
 
 
-svc = SVC(C=15,kernel='rbf',random_state=11)
+y_get_train = y_get_train.replace(to_replace={"Anomalous":0,"Valid":1})
+y_post_train = y_post_train.replace(to_replace={"Anomalous":0,"Valid":1})
+y_get_test = y_get_test.replace(to_replace={"Anomalous":0,"Valid":1})
+y_post_test = y_post_test.replace(to_replace={"Anomalous":0,"Valid":1})
+
+svc = SVC(C=5,kernel='rbf',random_state=11)
 linear_svc = LinearSVC(C=6,random_state=11)
 
 #logistitc regression
@@ -93,7 +100,7 @@ lr_post = LogisticRegression(class_weight='balanced',random_state=11,max_iter=25
 
 # Linear SVC
 
-print("error with 1-gram Using LinearSVC for GET dataset: ",(err_lsvc_get:=(-100*sum(l:=cross_val_score(linear_svc,X1_get,y1_get,cv=5,scoring='neg_mean_absolute_error'))/len(l))))
+# print("error with 1-gram Using LinearSVC for GET dataset: ",(err_lsvc_get:=(-100*sum(l:=cross_val_score(linear_svc,X1_get,y1_get,cv=5,scoring='neg_mean_absolute_error'))/len(l))))
 # err_lsvc_get = str(err_lsvc_get)[:4]
 # pickle.dump(linear_svc,open(f'models/linear_svc_get-{err_lsvc_get}.sav','wb'))
 
@@ -104,15 +111,23 @@ print("error with 1-gram Using LinearSVC for GET dataset: ",(err_lsvc_get:=(-100
 # SVC 
 
 # print("error with 1-gram Using normal SVC with POST: ",(err_svc_post:=(-100*(sum(l:=cross_val_score(svc,X1_post,y1_post,cv=5,scoring='neg_mean_absolute_error'))/len(l)))))
+matrix_post = vectorizer_post.transform(post_df_test.Request)
+matrix_get = vectorizer_get.transform(get_df_test.Request)
+features_test_post=pd.DataFrame(matrix_post.todense(),columns=vectorizer_post.get_feature_names_out())
+features_test_get = pd.DataFrame(matrix_get.todense(),columns=vectorizer_get.get_feature_names_out())
 
-# svc.fit(X1_post,y1_post)
-# pickle.dump(svc,open(f'models/normal_svc_post.sav','wb'))
+svc.fit(features_train_post,y_post_train)
+preds=svc.predict(features_test_post)
+print("ERROR with POST model: ",mean_absolute_error(y_post_test,preds))
+pickle.dump(svc,open(f'models/normal_svc_post.sav','wb'))
 
 # print("error with 1-gram Using normal SVC with GET dataset: ",(err_svc_get:=(-100*(sum(l:=cross_val_score(svc,X1_get,y1_get,cv=5,scoring='neg_mean_absolute_error'))/len(l)))))
 # err_svc_get=str(err_svc_get)[:4]
 
-# svc.fit(X1_get,y1_get)
-# pickle.dump(svc,open(f'models/normal_svc_get.sav','wb'))
+svc.fit(features_train_get,y_get_train)
+preds=svc.predict(features_test_get)
+print("ERROR with GET model: ",mean_absolute_error(y_get_test,preds))
+pickle.dump(svc,open(f'models/normal_svc_get.sav','wb'))
 
 # print("error with 1-gram Using Logistic Regression: ",(err_lr:=(-100*(sum(l:=cross_val_score(lr,X1,y1,cv=5,scoring='neg_mean_absolute_error'))/len(l)))))
 # err_lr= str(err_lr)[:4]

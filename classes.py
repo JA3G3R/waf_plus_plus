@@ -107,7 +107,7 @@ class HTTPServer:
             if not resource or resource=='/':
                 uri="index.html"
             else:
-                resp  = "HTTP/1.1 200 OK\r\n\r\nYou passed the security check!!!"
+                resp ="HTTP/1.1 200 OK\r\n\r\nYou passed the security check!!!"
 
         print(f"[+]DEBUG: REQUESTED URL : {uri}")
         return resp
@@ -123,8 +123,10 @@ class HTTPServer:
 class WAF:
 
     def __init__(self,):
-        self.csic_ecml_get_model = pickle.load(open('code/models/logistic_regression_get.sav','rb'))
-        self.csic_ecml_post_model = pickle.load(open('code/models/logistic_regression_post.sav','rb'))
+        self.csic_ecml_get_model = pickle.load(open('models/normal_svc_get.sav','rb'))
+        self.csic_ecml_post_model = pickle.load(open('models/normal_svc_post.sav','rb'))
+        self.tfidf_get = pickle.load(open('models/tfidf_get.sav','rb'))
+        self.tfidf_post = pickle.load(open('models/tfidf_post.sav','rb'))
 
     def make_request_features(self,header_list,method,data="",query=""):
         
@@ -138,12 +140,11 @@ class WAF:
         for i in range(len(ngrams)):
             vocabulary[ngrams[i]] = i
 
-        vectorizer = TfidfVectorizer(analyzer='char',ngram_range=(1,1),vocabulary=vocabulary)
-
         request=""
         for i in header_list:
             key,value = i.split(':')[:2]
             key=key.strip(' ').lower()
+            value = value.strip(' ').lower()
             if key == 'connection':
                 request+=value
             elif key == 'accept':
@@ -165,9 +166,11 @@ class WAF:
             request += data
         if(len(query) and method == 'GET'):
             request += query
+        if method=='GET':
+            request = pd.DataFrame(self.tfidf_get.transform([request]).todense(),columns=self.tfidf_get.get_feature_names_out())
+        elif method == 'POST':
+            request = pd.DataFrame(self.tfidf_post.transform([request]).todense(),columns=self.tfidf_post.get_feature_names_out())
 
-        print("RequestString: ",request)
-        request = pd.DataFrame(vectorizer.fit_transform([request]).todense(),columns=vectorizer.get_feature_names_out())
         return request
 
 
