@@ -1,7 +1,10 @@
-
+from xmlrpc.client import FastMarshaller
+import pandas as pd
 import socket 
 import ssl
 import threading
+import pickle
+from sklearn.feature_extraction.text import TfidfVectorizer
 
 class HTTPServer:
 
@@ -50,34 +53,40 @@ class HTTPServer:
     def handleClient(self,client_sock,client_addr):
         host,port = client_addr
         print("[+]DEBUG : Received connection from ",host,port)
-        
+        c=0
         while True:
             try:
                 if client_sock.fileno == -1:
                     print("Closed connection")
                     return 
                 req = client_sock.recv(1024).decode()
-                print(f"RECVD: from {host}:{port}\n{req} {'-'*20}")
-                resp=self.handleRequest(req)
-                
-                client_sock.send(resp.encode())
+                if req:
+                    print(f"RECVD: from {host}:{port}\n{req} {'-'*20}")
+                    resp=self.handleRequest(req)
+                    client_sock.send(resp.encode())
+                else:
+                    # if c==10:
+                    client_sock.sendall(b'HTTP/1.1 200 OK\r\n')
+                    client_sock.close()
+                    return
+                    c=0
+                    # c+=1
             except ConnectionResetError:
                 break
         return                       
 
     def handleRequest(self,req):
-
         if "\r\n\r\n" in req:
             pre,body = req.split("\r\n\r\n")
             first_line= pre.split("\r\n")[0]
             header_list = pre.split("\r\n")[1:]
         else:
             return ""
-        
+
         # print(f"BODY: \n{body}\n"+"-"*30+"\n"+f"REQUEST:\n{first_line}\n"+"-"*30+"\n"+f"HEADERS:\n{header_list}\n"+"-"*30+"\n")
         
         method,url,version = first_line.split(' ')
-        
+        resp=""
         if version != "HTTP/1.1" and version != "HTTP/2":
             return "Invalid HTTP version"
         else:
@@ -87,39 +96,105 @@ class HTTPServer:
 
             elif "POST" == method:
                 resp = self.doPost(url,header_list,body)
-                
         return resp
                 
 
-    def doGet(self,url,header_list,body):
+    def doGet(self,uri,header_list,body):
         resp = "HTTP/1.1 400 Bad Request\r\n\r\nThe Client sent a malformed request is all we know."
-        resource = url.split('/')[1]
-        if self.waf.checkGet(url,header_list,body):
-            resp = "HTTP/1.1 200 OK\r\nContent-Encoding: text/html\r\n\r\n"
-            with open(resource,"r") as f:
-                resp += f.read()
-            # resp  = "HTTP/1.1 200 OK\r\n\r\nYou passed the security check!!!"
-        print(f"[+]DEBUG: REQUESTED URL : {url}")
 
+        if self.waf.checkGet(uri,header_list):
+            resource = uri.split('/?')[0]
+            if not resource or resource=='/':
+                uri="index.html"
+            else:
+                resp  = "HTTP/1.1 200 OK\r\n\r\nYou passed the security check!!!"
+
+        print(f"[+]DEBUG: REQUESTED URL : {uri}")
         return resp
 
     def doPost(self,url,header_list,body):
         resp = "HTTP/1.1 400 Bad Request\r\n\r\nThe Client sent a malformed request is all we know."
-        if self.waf.checkPost(url,header_list,body):
+        if self.waf.checkPost(header_list,body):
             resp= "HTTP/1.1 200 OK\r\n\r\nYou passed the security check!!!"
+        
         return resp
 
 
 class WAF:
 
     def __init__(self,):
-        pass    
+        self.csic_ecml_get_model = pickle.load(open('code/models/logistic_regression_get.sav','rb'))
+        self.csic_ecml_post_model = pickle.load(open('code/models/logistic_regression_post.sav','rb'))
 
-    def checkGet(self,url,header_list,body):
-        return False
+    def make_request_features(self,header_list,method,data="",query=""):
+        
+        ngrams = [' ', '!', '#', '$', '%', '&', '\'', '(', ')', '*', '+', ',', '-', '.',
+        '/', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', ':', ';', '<',
+        '=', '>', '?', '@', '[', '\\', '\]', '_', '`', 'a', 'b', 'c', 'd', 'e',
+        'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's',
+        't', 'u', 'v', 'w', 'x', 'y', 'z', '{', '|', '}', '~']
 
-    def checkPost(self,req):
-        return True
+        vocabulary = {}
+        for i in range(len(ngrams)):
+            vocabulary[ngrams[i]] = i
+
+        vectorizer = TfidfVectorizer(analyzer='char',ngram_range=(1,1),vocabulary=vocabulary)
+
+        request=""
+        for i in header_list:
+            key,value = i.split(':')[:2]
+            key=key.strip(' ').lower()
+            if key == 'connection':
+                request+=value
+            elif key == 'accept':
+                request+=value
+            elif key == 'accept-charset':
+                request += value
+            elif key == 'accept-language':
+                request += value
+            elif key == 'cache-control':
+                request += value
+            elif key == 'pragma':
+                request+=value
+            elif key == 'user-agent':
+                request += value
+            elif (key == 'content-type' and method == 'POST'):
+                request += value
+
+        if (len(data) and method == 'POST'):
+            request += data
+        if(len(query) and method == 'GET'):
+            request += query
+
+        print("RequestString: ",request)
+        request = pd.DataFrame(vectorizer.fit_transform([request]).todense(),columns=vectorizer.get_feature_names_out())
+        return request
+
+
+    def checkGet(self,url,header_list):
+        request = self.make_request_features(header_list,method='GET',query=url)
+        # prediction = self.xss_check.predict(request)[0]
+        # if prediction==1:
+        #     print('XSS Detected!!')
+        #     return False
+        prediction = self.csic_ecml_get_model.predict(request)[0]
+        print('Get Model Predicted: ',prediction)
+        if prediction==0:
+            return False
+        else:
+            return True
+
+
+    def checkPost(self,header_list,data):
+        request = self.make_request_features(header_list,method='POST',data=data)
+        print()
+        prediction = self.csic_ecml_post_model.predict(request)[0]
+        print("Post Model Predicted: ",prediction)
+        if prediction==0:
+            return False
+        else:
+            return True
+        
 
 if __name__ =="__main__":
     # print(help(HTTPServer))
