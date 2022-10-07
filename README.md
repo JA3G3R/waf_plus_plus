@@ -1,7 +1,7 @@
-## WAF Using Deep Neural Networks
+## WAF Using Machine Learning
 
 #### Moving Parts
 
 - A web server 
 - A WAF server
-- A DNN Model
+- A ML Model
